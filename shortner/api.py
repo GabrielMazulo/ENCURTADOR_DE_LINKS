@@ -2,7 +2,9 @@ from ninja import Router
 from .shemas import LinksSchemas, UpdateLinkSchema
 from .models import Links, Clicks
 from django.shortcuts import get_object_or_404, redirect
-
+import qrcode
+from io import BytesIO
+import base64
 
 shortner_router = Router()
 
@@ -13,7 +15,7 @@ def create(request, link_shema: LinksSchemas):
     token = data['token']
     redirect_link = data['redirect_link']
     expiration_time = data['expiration_time']
-    max_uniques_cliques = data['max_uniques_cliques']
+    max_uniques_cliques = data['max_uniques_cliques'] or 0
 
 
 
@@ -56,4 +58,41 @@ def update_link(request, link_id: int, link_schema: UpdateLinkSchema):
         return 409, {'error': 'Toke já existe, use outro'} 
     
     for field, value in data.items():
-        ...
+        if value:
+            setattr(link, field, value)
+    link.save()
+    return 200, link 
+
+@shortner_router.get('statiscs/{link_id}/', response={200: dict})
+def statiscs(request, link_id: int):
+    link = get_object_or_404(Links, id=link_id)
+    uniques_clicks = Clicks.objects.filter(link=link).values('ip').distinct().count()
+    total_clicks = Clicks.objects.filter(link=link).values('ip').count()
+
+    return 200, {'uniques_clicks': uniques_clicks, 'total_clicks': total_clicks}
+
+def get_api_url(request, token):
+    sheme = request.scheme
+    host = request.get_host()
+    return f"{sheme}://{host}/api/{token}"
+
+
+@shortner_router.get('qrcode/{link_id}/', response={200: dict})
+def get_qrcode(request, link_id: int):
+    link = get_object_or_404(Links, id=link_id)
+
+    qr = qrcode.QRCode(
+        version=1,
+        box_size=10,
+        border=4
+    )
+    qr.add_data(get_api_url(request, link.token))
+    qr.make(fit=True)
+
+    content = BytesIO() 
+    img = qr.make_image(fill_color='black', back_color='white')
+    img.save(content)
+
+    data = base64.b64encode(content.getvalue()).decode('UTF-8')
+    return 200, {'content_image': data}
+
